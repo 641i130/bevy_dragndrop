@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use bevy_dragndrop::DragPlugin;
 use bevy_dragndrop::*;
-use rand::prelude::*;
+use rand::Rng;
 
 fn main() {
     App::new()
@@ -13,48 +13,45 @@ fn main() {
 }
 
 fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
-    let icon: Handle<Image> = asset_server.load("textures/icon.png");
     // Camera
-    commands.spawn(Camera2dBundle::default());
+    commands.spawn(Camera2d);
 
-    let mut rng = thread_rng();
+    let mut rng = rand::rng();
 
     commands
-        .spawn(SpriteBundle {
-            sprite: Sprite {
+        .spawn((
+            Sprite {
                 color: Color::srgb(0.40, 0.40, 0.40),
                 ..default()
             },
-            transform: Transform {
+            Transform {
                 scale: Vec3::new(1280.0, 720.0, 1.0),
                 ..default()
             },
-            ..default()
-        })
+        ))
         .with_children(|parent| {
             parent
-                .spawn(SpriteBundle {
-                    sprite: Sprite {
+                .spawn((
+                    Sprite {
                         color: Color::srgb(0.10, 0.10, 0.10),
                         ..default()
                     },
-                    transform: Transform {
+                    Transform {
                         scale: Vec3::new(0.5625, 1.0, 1.0),
                         translation: Vec3::new(0.0, 0.0, 1.0),
                         ..default()
                     },
-                    ..default()
-                })
+                ))
                 .with_children(|parent| {
                     for x in 0..5 {
                         for y in 0..5 {
                             parent
-                                .spawn(SpriteBundle {
-                                    sprite: Sprite {
+                                .spawn((
+                                    Sprite {
                                         color: Color::srgb(0.75, 0.75, 0.75),
                                         ..default()
                                     },
-                                    transform: Transform {
+                                    Transform {
                                         scale: Vec3::new(0.2, 0.2, 1.0),
                                         translation: Vec3::new(
                                             -0.4 + (x as f32 * 0.2),
@@ -63,44 +60,37 @@ fn setup(mut commands: Commands, asset_server: Res<AssetServer>) {
                                         ),
                                         ..default()
                                     },
-                                    ..default()
-                                })
+                                ))
                                 .with_children(|parent| {
                                     parent
                                         .spawn((
-                                            SpriteBundle {
-                                                sprite: Sprite {
-                                                    color: Color::srgb(0.10, 0.10, 0.10),
-                                                    ..default()
-                                                },
-                                                transform: Transform {
-                                                    scale: Vec3::new(0.96, 0.96, 1.0),
-                                                    translation: Vec3::new(0.0, 0.0, 1.0),
-                                                    ..default()
-                                                },
+                                            Sprite {
+                                                color: Color::srgb(0.10, 0.10, 0.10),
+                                                ..default()
+                                            },
+                                            Transform {
+                                                scale: Vec3::new(0.96, 0.96, 1.0),
+                                                translation: Vec3::new(0.0, 0.0, 1.0),
                                                 ..default()
                                             },
                                             Receiver,
                                         ))
                                         .with_children(|parent| {
                                             parent.spawn((
-                                                SpriteBundle {
-                                                    sprite: Sprite {
-                                                        color: Color::hsl(
-                                                            rng.gen::<f32>() * 360.0,
-                                                            1.0,
-                                                            0.5,
-                                                        ),
-                                                        ..default()
-                                                    },
-                                                    transform: Transform {
-                                                        scale: Vec3::new(
-                                                            0.00390625, 0.00390625, 0.00390625,
-                                                        ),
-                                                        translation: Vec3::new(0.0, 0.0, 1.0),
-                                                        ..default()
-                                                    },
-                                                    texture: icon.clone(),
+                                                Sprite {
+                                                    image: asset_server.load("textures/icon.png"),
+                                                    color: Color::hsl(
+                                                        rng.random::<f32>() * 360.0,
+                                                        1.0,
+                                                        0.5,
+                                                    ),
+                                                    ..default()
+                                                },
+                                                Transform {
+                                                    scale: Vec3::new(
+                                                        0.00390625, 0.00390625, 0.00390625,
+                                                    ),
+                                                    translation: Vec3::new(0.0, 0.0, 1.0),
                                                     ..default()
                                                 },
                                                 Draggable {
@@ -122,15 +112,15 @@ fn on_dropped(
     mut commands: Commands,
     mut er_drop: EventReader<Dropped>,
     mut q_draggable: Query<&mut Transform, With<Draggable>>,
-    parent: Query<&Parent, With<Draggable>>,
+    parent: Query<&ChildOf, With<Draggable>>,
     children: Query<&Children, With<Receiver>>,
 ) {
     for event in er_drop.read() {
         if let Some(received) = event.received {
-            let ent_parent = parent.get(event.dropped).unwrap().get();
-            commands.entity(event.dropped).remove_parent();
+            let ent_parent = parent.get(event.dropped).unwrap().parent();
+            commands.entity(event.dropped).remove::<ChildOf>();
 
-            let child = *children.get(received).unwrap().iter().next().unwrap();
+            let child = children.get(received).unwrap().iter().next().unwrap();
             commands
                 .entity(received)
                 .remove_children(&[child])
