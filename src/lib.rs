@@ -1,4 +1,5 @@
 use std::ops::Mul;
+
 use bevy::{prelude::*, window::PrimaryWindow};
 use bitflags::bitflags;
 
@@ -127,30 +128,29 @@ impl Plugin for DragPlugin {
     }
 }
 
-#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn startdrag(
     mut commands: Commands,
     q_draggable: Query<(
         &GlobalTransform,
-        Option<&Sprite>,
+        Option<&Handle<Image>>,
         Entity,
-        Option<&ComputedNode>,
+        Option<&Node>,
         &Draggable,
     )>,
     dragging: Query<&Dragging>,
     awaiting: Query<&AwaitingDrag>,
     buttons: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
-    q_windows: Single<&Window, With<PrimaryWindow>>,
-    q_camera: Single<(&Camera, &GlobalTransform)>,
+    q_windows: Query<&Window, With<PrimaryWindow>>,
+    q_camera: Query<(&Camera, &GlobalTransform)>,
     assets: Res<Assets<Image>>,
     mut ew_dragged: EventWriter<Dragged>,
     mut ew_await: EventWriter<DragAwait>,
     time: Res<Time<Real>>,
 ) {
     let inputs = get_inputs(&keys, &buttons);
-    let window = q_windows.into_inner();
-    let (camera, camera_transform) = q_camera.into_inner();
+    let window = q_windows.single();
+    let (camera, camera_transform) = q_camera.single();
 
     let mut candidates: Vec<(Entity, f32, &Draggable)> = Vec::new();
 
@@ -184,16 +184,16 @@ fn startdrag(
                 }
             }
             if let Some(x) = final_candidate.2.minimum_held {
-                ew_await.write(DragAwait {
+                ew_await.send(DragAwait {
                     awaiting: final_candidate.0,
                     inputs,
                 });
                 commands.entity(final_candidate.0).insert(AwaitingDrag {
-                    ends: time.elapsed_secs_f64() + x,
+                    ends: time.elapsed_seconds_f64() + x,
                 });
                 return;
             }
-            ew_dragged.write(Dragged {
+            ew_dragged.send(Dragged {
                 dragged: final_candidate.0,
                 inputs,
             });
@@ -216,8 +216,8 @@ fn awaitdrag(
 
     for (entity, draggable, awaiting) in q_draggable.iter() {
         if inputs.contains(draggable.required) && !(inputs.intersects(draggable.disallowed)) {
-            if time.elapsed_secs_f64() > awaiting.ends {
-                ew_dragged.write(Dragged {
+            if time.elapsed_seconds_f64() > awaiting.ends {
+                ew_dragged.send(Dragged {
                     dragged: entity,
                     inputs,
                 });
@@ -231,29 +231,37 @@ fn awaitdrag(
         commands.entity(entity).remove::<AwaitingDrag>();
     }
 }
-#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+
 fn dragging(
     q_parent: Query<&GlobalTransform>,
     mut q_dragging: Query<(
-        &ChildOf,
+        &Parent,
         &mut Transform,
-        Option<&mut Node>,
+        Option<&mut Style>,
         &mut Dragging,
         Entity,
     )>,
-    q_receivers: Query<(&GlobalTransform, Option<&Sprite>, Entity, Option<&ComputedNode>), With<Receiver>>,
+    q_receivers: Query<
+        (
+            &GlobalTransform,
+            Option<&Handle<Image>>,
+            Entity,
+            Option<&Node>,
+        ),
+        With<Receiver>,
+    >,
     buttons: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
-    q_windows: Single<&Window, With<PrimaryWindow>>,
-    q_camera: Single<(&Camera, &GlobalTransform)>,
+    q_windows: Query<&Window, With<PrimaryWindow>>,
+    q_camera: Query<(&Camera, &GlobalTransform)>,
     assets: Res<Assets<Image>>,
     mut ew_hover: EventWriter<HoveredChange>,
 ) {
     let inputs = get_inputs(&keys, &buttons);
-    let window = q_windows.into_inner();
-    let (camera, camera_transform) = q_camera.into_inner();
-    for (child_of, mut transform, style, mut dragging, entity) in q_dragging.iter_mut() {
-        let gtransform = q_parent.get(child_of.parent()).unwrap();
+    let window = q_windows.single();
+    let (camera, camera_transform) = q_camera.single();
+    for (parent, mut transform, style, mut dragging, entity) in q_dragging.iter_mut() {
+        let gtransform = q_parent.get(parent.get()).unwrap();
         if let Some(logical_position) = window.cursor_position() {
             let world_position = camera
                 .viewport_to_world(camera_transform, logical_position)
@@ -279,11 +287,11 @@ fn dragging(
                 transform.translation = local_point;
             }
 
-            for (gtransform, image_handle, receiver, computed_node) in q_receivers.iter() {
+            for (gtransform, image_handle, receiver, node) in q_receivers.iter() {
                 if is_in_bounds(
                     gtransform,
                     image_handle,
-                    computed_node,
+                    node,
                     &assets,
                     logical_position,
                     world_position,
@@ -293,7 +301,7 @@ fn dragging(
                             return;
                         }
                     }
-                    ew_hover.write(HoveredChange {
+                    ew_hover.send(HoveredChange {
                         hovered: entity,
                         prevreceiver: dragging.hovering,
                         receiver: Some(receiver),
@@ -304,7 +312,7 @@ fn dragging(
                 }
             }
             if dragging.hovering.is_some() {
-                ew_hover.write(HoveredChange {
+                ew_hover.send(HoveredChange {
                     hovered: entity,
                     prevreceiver: dragging.hovering,
                     receiver: None,
@@ -315,15 +323,23 @@ fn dragging(
         }
     }
 }
-#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+
 fn drop(
     mut commands: Commands,
     buttons: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
-    q_receivers: Query<(&GlobalTransform, Option<&Sprite>, Entity, Option<&ComputedNode>), With<Receiver>>,
+    q_receivers: Query<
+        (
+            &GlobalTransform,
+            Option<&Handle<Image>>,
+            Entity,
+            Option<&Node>,
+        ),
+        With<Receiver>,
+    >,
     q_dragging: Query<(Entity, &Draggable, &Dragging)>,
-    q_windows: Single<&Window, With<PrimaryWindow>>,
-    q_camera: Single<(&Camera, &GlobalTransform)>,
+    q_windows: Query<&Window, With<PrimaryWindow>>,
+    q_camera: Query<(&Camera, &GlobalTransform)>,
     mut ew_dropped: EventWriter<Dropped>,
     mut ew_hover: EventWriter<HoveredChange>,
     assets: Res<Assets<Image>>,
@@ -332,31 +348,31 @@ fn drop(
     if q_dragging.is_empty() {
         return;
     }
-    let window = q_windows.into_inner();
-    let (camera, camera_transform) = q_camera.into_inner();
+    let window = q_windows.single();
+    let (camera, camera_transform) = q_camera.single();
     if let Some(logical_position) = window.cursor_position() {
         let world_position = camera
             .viewport_to_world(camera_transform, logical_position)
             .map(|ray| ray.origin.truncate())
             .unwrap();
-        for (gtransform, image_handle, entity, computed_node) in q_receivers.iter() {
+        for (gtransform, image_handle, entity, node) in q_receivers.iter() {
             if is_in_bounds(
                 gtransform,
                 image_handle,
-                computed_node,
+                node,
                 &assets,
                 logical_position,
                 world_position,
             ) {
                 for (drag_entity, draggable, dragging) in q_dragging.iter() {
                     if !inputs.intersects(draggable.required & InputFlags::Clicks) {
-                        ew_hover.write(HoveredChange {
+                        ew_hover.send(HoveredChange {
                             hovered: drag_entity,
                             receiver: None,
                             prevreceiver: dragging.hovering,
                             inputs,
                         });
-                        ew_dropped.write(Dropped {
+                        ew_dropped.send(Dropped {
                             dropped: drag_entity,
                             received: Some(entity),
                             inputs,
@@ -369,13 +385,13 @@ fn drop(
         }
         for (entity, draggable, dragging) in q_dragging.iter() {
             if !inputs.intersects(draggable.required & InputFlags::Clicks) {
-                ew_hover.write(HoveredChange {
+                ew_hover.send(HoveredChange {
                     hovered: entity,
                     receiver: None,
                     prevreceiver: dragging.hovering,
                     inputs,
                 });
-                ew_dropped.write(Dropped {
+                ew_dropped.send(Dropped {
                     dropped: entity,
                     received: None,
                     inputs,
@@ -388,14 +404,14 @@ fn drop(
 
 fn is_in_bounds(
     gtransform: &GlobalTransform,
-    image_handle: Option<&Sprite>,
-    computed_node: Option<&ComputedNode>,
+    image_handle: Option<&Handle<Image>>,
+    node: Option<&Node>,
     assets: &Res<Assets<Image>>,
     logical_position: Vec2,
     world_position: Vec2,
 ) -> bool {
-    if let  Some(computed_node) =  computed_node {
-        let bounding_box = Rect::from_center_size(gtransform.translation().truncate(), computed_node.size());
+    if let Some(node) = node {
+        let bounding_box = node.logical_rect(gtransform);
         bounding_box.contains(logical_position)
     } else {
         let transform = gtransform.compute_transform();
@@ -403,7 +419,7 @@ fn is_in_bounds(
 
         //Need to account for sprite size if it is a sprite.
         if let Some(img) = image_handle {
-            scaled_image_dimension *= assets.get(img.image.id()).unwrap().size().as_vec2();
+            scaled_image_dimension *= assets.get(img).unwrap().size().as_vec2();
         }
 
         let bounding_box =
@@ -412,10 +428,7 @@ fn is_in_bounds(
     }
 }
 
-fn get_inputs(
-    keys: &Res<ButtonInput<KeyCode>>,
-    buttons: &Res<ButtonInput<MouseButton>>,
-) -> InputFlags {
+fn get_inputs(keys: &Res<ButtonInput<KeyCode>>, buttons: &Res<ButtonInput<MouseButton>>) -> InputFlags {
     (InputFlags::LeftClick * (buttons.pressed(MouseButton::Left) as u8))
         | (InputFlags::RightClick * (buttons.pressed(MouseButton::Right) as u8))
         | (InputFlags::MiddleClick * (buttons.pressed(MouseButton::Middle) as u8))
