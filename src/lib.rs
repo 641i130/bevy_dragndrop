@@ -107,6 +107,19 @@ pub struct AwaitingDrag {
 #[derive(Component)]
 pub struct Receiver;
 
+/// Component that defines drag offset for an entity during dragging
+#[derive(Component, Clone, Copy, Default)]
+pub struct DragOffset {
+    pub x: f32,
+    pub y: f32,
+}
+
+impl DragOffset {
+    pub fn new(x: f32, y: f32) -> Self {
+        Self { x, y }
+    }
+}
+
 /// Plugin that contains systems and events for dragging and dropping.
 pub struct DragPlugin;
 
@@ -248,9 +261,10 @@ fn dragging(
         Option<&mut Node>,
         &mut Dragging,
         Entity,
+        Option<&DragOffset>,
     )>,
     mut visibility_query: Query<&mut Visibility>,
-    q_computed_nodes: Query<&ComputedNode>,
+    _q_computed_nodes: Query<&ComputedNode>,
     q_receivers: Query<(&GlobalTransform, Option<&Sprite>, Entity, Option<&ComputedNode>), With<Receiver>>,
     buttons: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -262,12 +276,15 @@ fn dragging(
     let inputs = get_inputs(&keys, &buttons);
     let window = q_windows.into_inner();
     let (camera, camera_transform) = q_camera.into_inner();
-    for (child_of, mut transform, style, mut dragging, entity) in q_dragging.iter_mut() {
+    for (child_of, mut transform, style, mut dragging, entity, drag_offset) in q_dragging.iter_mut() {
         if let Some(logical_position) = window.cursor_position() {
             let world_position = camera
                 .viewport_to_world(camera_transform, logical_position)
                 .map(|ray| ray.origin.truncate())
                 .unwrap();
+
+            // Get drag offset from component or use default
+            let offset = drag_offset.copied().unwrap_or_default();
 
             // Check if we need to reparent this entity to bypass container positioning
             if !dragging.reparented && child_of.is_some() {
@@ -287,13 +304,14 @@ fn dragging(
             println!("Reparented: {}", dragging.reparented);
             println!("Has ChildOf: {}", child_of.is_some());
             println!("Has Node style: {}", style.is_some());
+            println!("Drag offset: x={}, y={}", offset.x, offset.y);
             
             if let Some(mut style) = style {
                 if dragging.reparented {
-                    // Use absolute positioning at root level
+                    // Use absolute positioning at root level with component-based offsets
                     style.position_type = PositionType::Absolute;
-                    style.left = Val::Px(logical_position.x - 50.0); // Center horizontally on card
-                    style.top = Val::Px(logical_position.y - 65.0);  // Center vertically on card
+                    style.left = Val::Px(logical_position.x - offset.x);
+                    style.top = Val::Px(logical_position.y - offset.y);
                     
                     // Reset conflicting positioning properties
                     style.right = Val::Auto;
@@ -303,7 +321,7 @@ fn dragging(
                     // Ensure visibility and proper layering
                     style.display = Display::Flex;
                     
-                    println!("UI POSITIONING: Absolute position set to: ({}, {})", logical_position.x - 50.0, logical_position.y - 65.0);
+                    println!("UI POSITIONING: Absolute position set to: ({}, {})", logical_position.x - offset.x, logical_position.y - offset.y);
                     println!("UI POSITIONING: Style - position_type: {:?}, left: {:?}, top: {:?}", style.position_type, style.left, style.top);
                     
                     // Ensure Z-index is set high for dragged elements
