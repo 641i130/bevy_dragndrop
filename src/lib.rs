@@ -5,7 +5,7 @@ use bitflags::bitflags;
 // Todo: Add more methods for InputFlags maybe
 
 bitflags! {
-    #[derive(Clone,Copy)]
+    #[derive(Clone,Copy,Debug)]
     /// Flags that keep track of relevant inputs.
     pub struct InputFlags: u8 {
         const LeftClick = 0b00000001;
@@ -94,6 +94,7 @@ impl Default for Draggable {
 #[derive(Component)]
 pub struct Dragging {
     pub hovering: Option<Entity>,
+    pub reparented: bool,
 }
 
 /// Component used to designate when an object is waiting to be able to be dragged.
@@ -105,6 +106,19 @@ pub struct AwaitingDrag {
 /// Component that may be attached to anything with a transform and GlobalTransform component to allow it to be detected when a draggable is dropped over it.
 #[derive(Component)]
 pub struct Receiver;
+
+/// Component that defines drag offset for an entity during dragging
+#[derive(Component, Clone, Copy, Default)]
+pub struct DragOffset {
+    pub x: f32,
+    pub y: f32,
+}
+
+impl DragOffset {
+    pub fn new(x: f32, y: f32) -> Self {
+        Self { x, y }
+    }
+}
 
 /// Plugin that contains systems and events for dragging and dropping.
 pub struct DragPlugin;
@@ -199,7 +213,10 @@ fn startdrag(
             });
             commands
                 .entity(final_candidate.0)
-                .insert(Dragging { hovering: None });
+                .insert(Dragging { 
+                    hovering: None,
+                    reparented: false,
+                });
         }
     }
 }
@@ -223,7 +240,10 @@ fn awaitdrag(
                 });
                 commands
                     .entity(entity)
-                    .insert(Dragging { hovering: None })
+                    .insert(Dragging { 
+                        hovering: None,
+                        reparented: false,
+                    })
                     .remove::<AwaitingDrag>();
             }
             return;
@@ -233,14 +253,18 @@ fn awaitdrag(
 }
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn dragging(
+    mut commands: Commands,
     q_parent: Query<&GlobalTransform>,
     mut q_dragging: Query<(
-        &ChildOf,
+        Option<&ChildOf>,
         &mut Transform,
         Option<&mut Node>,
         &mut Dragging,
         Entity,
+        Option<&DragOffset>,
     )>,
+    mut visibility_query: Query<&mut Visibility>,
+    _q_computed_nodes: Query<&ComputedNode>,
     q_receivers: Query<(&GlobalTransform, Option<&Sprite>, Entity, Option<&ComputedNode>), With<Receiver>>,
     buttons: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -252,31 +276,75 @@ fn dragging(
     let inputs = get_inputs(&keys, &buttons);
     let window = q_windows.into_inner();
     let (camera, camera_transform) = q_camera.into_inner();
-    for (child_of, mut transform, style, mut dragging, entity) in q_dragging.iter_mut() {
-        let gtransform = q_parent.get(child_of.parent()).unwrap();
+    for (child_of, mut transform, style, mut dragging, entity, drag_offset) in q_dragging.iter_mut() {
         if let Some(logical_position) = window.cursor_position() {
             let world_position = camera
                 .viewport_to_world(camera_transform, logical_position)
                 .map(|ray| ray.origin.truncate())
                 .unwrap();
-            let mut mat = gtransform.compute_matrix();
-            mat = mat.inverse();
 
+            // Get drag offset from component or use default
+            let offset = drag_offset.copied().unwrap_or_default();
+
+            // Check if we need to reparent this entity to bypass container positioning
+            if !dragging.reparented && child_of.is_some() {
+                // First frame of dragging - reparent to root
+                commands.entity(entity).remove::<ChildOf>();
+                dragging.reparented = true;
+                
+                println!("=== REPARENTED TO ROOT ===");
+                println!("Entity {:?} reparented to root for direct positioning", entity);
+            }
+
+            println!("=== POSITIONING DEBUG ===");
+            println!("Entity: {:?}", entity);
+            println!("Cursor position: {:?}", logical_position);
+            println!("Window size: {:?}", (window.width(), window.height()));
+            println!("World position: {:?}", world_position);
+            println!("Reparented: {}", dragging.reparented);
+            println!("Has ChildOf: {}", child_of.is_some());
+            println!("Has Node style: {}", style.is_some());
+            println!("Drag offset: x={}, y={}", offset.x, offset.y);
+            
             if let Some(mut style) = style {
-                let local_point4 =
-                    mat.mul_vec4(Vec4::new(logical_position.x, logical_position.y, 0.0, 1.0));
-                let local_point =
-                    Vec3::new(local_point4.x, local_point4.y, transform.translation.z);
-
-                style.left = Val::Px(local_point.x);
-                style.top = Val::Px(local_point.y);
+                if dragging.reparented {
+                    // Use absolute positioning at root level with component-based offsets
+                    style.position_type = PositionType::Absolute;
+                    style.left = Val::Px(logical_position.x - offset.x);
+                    style.top = Val::Px(logical_position.y - offset.y);
+                    
+                    // Reset conflicting positioning properties
+                    style.right = Val::Auto;
+                    style.bottom = Val::Auto;
+                    style.margin = UiRect::all(Val::Px(0.0));
+                    
+                    // Ensure visibility and proper layering
+                    style.display = Display::Flex;
+                    
+                    println!("UI POSITIONING: Absolute position set to: ({}, {})", logical_position.x - offset.x, logical_position.y - offset.y);
+                    println!("UI POSITIONING: Style - position_type: {:?}, left: {:?}, top: {:?}", style.position_type, style.left, style.top);
+                    
+                    // Ensure Z-index is set high for dragged elements
+                    commands.entity(entity).insert(ZIndex(1000));
+                } else if let Some(child_of) = child_of {
+                    // Still in parent container, use relative positioning
+                    let parent_transform = q_parent.get(child_of.parent()).ok();
+                    if let Some(_parent_gt) = parent_transform {
+                        // Use transform-based positioning for contained elements
+                        transform.translation = Vec3::new(world_position.x, world_position.y, transform.translation.z);
+                        println!("CONTAINER POSITIONING: Transform position set to: ({}, {})", world_position.x, world_position.y);
+                    }
+                }
             } else {
-                let local_point4 =
-                    mat.mul_vec4(Vec4::new(world_position.x, world_position.y, 0.0, 1.0));
-                let local_point =
-                    Vec3::new(local_point4.x, local_point4.y, transform.translation.z);
+                // For world objects, use world position directly
+                transform.translation = Vec3::new(world_position.x, world_position.y, transform.translation.z);
+                println!("WORLD POSITIONING: Transform position set to: ({}, {})", world_position.x, world_position.y);
+            }
 
-                transform.translation = local_point;
+            // Ensure dragged entity is visible
+            if let Ok(mut visibility) = visibility_query.get_mut(entity) {
+                *visibility = Visibility::Visible;
+                println!("VISIBILITY: Set to visible for entity {:?}", entity);
             }
 
             for (gtransform, image_handle, receiver, computed_node) in q_receivers.iter() {
@@ -426,3 +494,4 @@ fn get_inputs(
         | (InputFlags::Alt
             * ((keys.pressed(KeyCode::AltLeft) || keys.pressed(KeyCode::AltRight)) as u8))
 }
+
